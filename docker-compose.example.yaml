@@ -1,0 +1,28 @@
+networks:
+  traefik-frontend:
+    external: true
+
+services:
+  aprs:
+    build: .
+    container_name: docker-aprs-server
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    networks:
+      - traefik-frontend
+    environment:
+      - TELNET_HOST=euro.aprs2.net
+      - TELNET_PORT=14580
+      - APRS_MSG_MAXLEN=${APRS_MSG_MAXLEN:-200}
+      - APRS_MSG_REGEX=${APRS_MSG_REGEX:-}
+      - APRS_SOFTNAME=${APRS_SOFTNAME:-APRSClient}
+      - APRS_VERSION=${APRS_VERSION:-1.0}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.aprs-server.rule=Host(`aprs.example.es`)"
+      - "traefik.http.routers.aprs-server.tls=true"
+      - "traefik.http.routers.aprs-server.entrypoints=websecure"
+      - "traefik.http.routers.aprs-server.tls.certresolver=letsEncrypt"
+      - "traefik.http.middlewares.aprs-server-redirectregex.redirectregex.permanent=true"
+      - "traefik.http.routers.aprs-server.middlewares=aprs-server-redirectregex,secure-headers@file"
