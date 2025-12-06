@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Telnet APRS Client — Preview & Pad</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", "Courier New", monospace; }
+  </style>
+</head>
+<body class="bg-light">
+<div class="container py-5">
+  <div class="card shadow-sm">
+    <div class="card-body">
+      <h3 class="card-title mb-3">Telnet APRS Client</h3>
+
+      <!-- LOGIN -->
+      <div id="loginBlock">
+        <form id="loginForm">
+          <div class="mb-3">
+            <label class="form-label">Indicativo (callsign)</label>
+            <input id="callsign" class="form-control text-uppercase" type="text" placeholder="Callsgn" required>
+            <div class="form-text">Introduce tu indicativo</div>
+          </div>
+          <div class="mb-3">
+            <button type="submit" class="btn btn-primary w-100">Login</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- SEND MESSAGE -->
+      <div id="sendBlock" style="display:none;">
+        <form id="sendForm">
+          <div class="row g-2 mb-3">
+            <div class="col-md-4">
+              <label class="form-label">Destinatario</label>
+              <input id="dest" class="form-control text-uppercase" type="text" placeholder="CALLSIGN" required>
+              <div id="destHelp" class="form-text">Permitidos: letras, dígitos, opcionalmente <code>-</code> o <code>/</code> seguido de más caracteres.</div>
+            </div>
+
+            <div class="col-md-8">
+              <label class="form-label">Mensaje</label>
+              <input id="msg" class="form-control" type="text" placeholder="Tu mensaje (máx 200 chars)" required>
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <button type="submit" class="btn btn-success w-100">Enviar mensaje APRS</button>
+          </div>
+        </form>
+
+        <!-- Preview -->
+        <div class="mb-3">
+          <label class="form-label">Previsualización del paquete (formato TNC2)</label>
+          <pre id="preview" class="p-3 bg-dark text-white rounded mono" style="min-height:80px; white-space:pre-wrap;"></pre>
+          <div id="previewInfo" class="text-muted small mt-1"></div>
+        </div>
+      </div>
+
+      <!-- LOG -->
+      <div class="mb-3">
+        <label class="form-label">Log / Respuesta</label>
+        <pre id="output" class="p-3 bg-dark text-white rounded" style="min-height:200px; white-space:pre-wrap;"></pre>
+      </div>
+
+      <div id="status" class="text-muted small"></div>
+    </div>
+  </div>
+
+  <footer class="mt-3 text-muted small">
+    Servidor conectado a {{.Host}}:{{.Port}} mediante Telnet.
+  </footer>
+</div>
+
+<script>
+const MAX_MSG_LEN = 200;
+const DEST_RE = /^[A-Z0-9]+([-/][A-Z0-9]+)?$/i;
+
+let sessionKey = null;
+
+// helpers
+function norm(s){ return (s||'').toUpperCase().trim(); }
+function padDest(dest){ dest = dest.replace(/\s+/g,''); return dest.padEnd(9,' '); }
+function replaceAccents(s){ const map={'á':'a','à':'a','ä':'a','Á':'A','À':'A','Ä':'A','é':'e','è':'e','ë':'e','É':'E','È':'E','Ë':'E','í':'i','ì':'i','ï':'i','Í':'I','Ì':'I','Ï':'I','ó':'o','ò':'o','ö':'o','Ó':'O','Ò':'O','Ö':'O','ú':'u','ù':'u','ü':'u','Ú':'U','Ù':'U','Ü':'U','ñ':'n','Ñ':'N'}; return s.split('').map(ch=>map[ch]||ch).join(''); }
+function sanitizePreview(s){ s=replaceAccents(s); return s.replace(/[^\x20-\x7E]/g,' ').trim(); }
+
+const loginForm = document.getElementById('loginForm');
+const sendForm  = document.getElementById('sendForm');
+const output    = document.getElementById('output');
+const status    = document.getElementById('status');
+const loginBlock = document.getElementById('loginBlock');
+const sendBlock = document.getElementById('sendBlock');
+const preview = document.getElementById('preview');
+const previewInfo = document.getElementById('previewInfo');
+
+function updatePreview(){
+  const callsign = norm(document.getElementById('callsign').value);
+  const destRaw = norm(document.getElementById('dest').value);
+  const msgRaw = document.getElementById('msg').value;
+
+  if(!callsign){
+    preview.textContent = 'Introduce tu indicativo en el formulario de login para ver la previsualización.';
+    previewInfo.textContent = '';
+    return;
+  }
+
+  const destForPreview = destRaw.replace(/\s+/g,'');
+  const validDest = DEST_RE.test(destForPreview);
+  const padded = padDest(destForPreview);
+  const sanitized = sanitizePreview(msgRaw);
+  const path = 'APRS,TCPIP';
+  preview.textContent = `${callsign}>${path}::${padded}:${sanitized}`;
+  previewInfo.textContent = `Destino "${destForPreview}" — válido: ${validDest ? 'sí' : 'no'}. Padding: ${padded.length}. Mensaje preview length=${sanitized.length}.`;
+}
+
+document.getElementById('callsign').addEventListener('input', updatePreview);
+document.getElementById('dest').addEventListener('input', updatePreview);
+document.getElementById('msg').addEventListener('input', updatePreview);
+
+loginForm.addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  status.textContent='Intentando login...';
+  const callsign = norm(document.getElementById('callsign').value);
+  try{
+    const resp = await fetch('/login',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({callsign})
+    });
+    const data = await resp.json();
+    if(!resp.ok){ output.textContent+="ERROR: "+(data.error||resp.statusText)+'\n'; status.textContent='Error'; return; }
+    output.textContent += (data.response||'')+'\n';
+    if(data.logged){ sessionKey = data.session_key; loginBlock.style.display='none'; sendBlock.style.display='block'; status.textContent='Logueado correctamente'; }
+    else status.textContent='Login no verificado';
+  } catch(err){ output.textContent+='Fetch error: '+err+'\n'; status.textContent='Error de red'; }
+  finally{ updatePreview(); }
+});
+
+sendForm.addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  status.textContent='';
+  const dest = norm(document.getElementById('dest').value).replace(/\s+/g,'');
+  const msg = document.getElementById('msg').value;
+
+  if(!sessionKey){ output.textContent+='ERROR: Haz login primero.\n'; return; }
+  if(!dest){ output.textContent+='ERROR: Destinatario vacío.\n'; return; }
+  if(!DEST_RE.test(dest)){ output.textContent+='ERROR: Destinatario inválido.\n'; return; }
+  if(msg.length===0){ output.textContent+='ERROR: Mensaje vacío.\n'; return; }
+  if(msg.length>MAX_MSG_LEN){ output.textContent+=`ERROR: Mensaje demasiado largo (máx ${MAX_MSG_LEN}).\n`; return; }
+
+  updatePreview();
+
+  try{
+    const resp = await fetch('/send',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({callsign: sessionKey, dest, msg})
+    });
+    const data = await resp.json();
+    if(!resp.ok){ output.textContent+="ERROR: "+(data.error||resp.statusText)+'\n'; status.textContent='Error'; return; }
+    output.textContent += (data.response||'')+'\n';
+    status.textContent='Mensaje enviado';
+  } catch(err){ output.textContent+='Fetch error: '+err+'\n'; status.textContent='Error de red'; }
+});
+
+updatePreview();
+</script>
+</body>
+</html>
